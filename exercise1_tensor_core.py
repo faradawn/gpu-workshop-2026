@@ -4,6 +4,22 @@ Run on a Blackwell GPU (DGX Spark, RTX 6000, or B200)
 
 Goal: See how Tensor Cores accelerate lower-precision matmuls.
       FP16 → FP8 → NVFP4: each step roughly doubles TFLOP/s on Blackwell.
+
+Expected output (B200 / GB10, 4096×4096 matrix) — NOT actual results:
+  ── Standard PyTorch Matmul ──────────────────────────
+  [FP32  ]    3.200 ms    43.01 TFLOP/s
+  [FP16  ]    0.820 ms   167.88 TFLOP/s
+  [BF16  ]    0.820 ms   167.88 TFLOP/s
+
+  ── Transformer Engine (Tensor Core, low precision) ──
+  [FP8   ]    0.420 ms   327.87 TFLOP/s
+  [NVFP4 ]    0.220 ms   625.74 TFLOP/s  ← Blackwell Tensor Cores
+
+  ── Speedup vs FP32 ──────────────────────────────────
+  FP16:  3.90x
+  BF16:  3.90x
+  FP8:   7.62x
+  NVFP4: 14.55x  ← Blackwell Tensor Cores
 """
 
 import time

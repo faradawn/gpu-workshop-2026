@@ -19,6 +19,26 @@ EAGLE3 improvements over EAGLE:
 Models used (change to match your local paths or HF repo IDs):
   TARGET_MODEL  — the full model being accelerated
   DRAFT_MODEL   — EAGLE3 draft head weights
+
+Expected output (B200 / GB10, Llama-3.1-8B, 5 prompts × 256 tokens) — NOT actual results:
+
+  ── Standard Autoregressive Decoding ─────────────────
+  [Prompt 1]  256 tokens   The key difference is that tensor parallelism splits...
+  [Prompt 2]  256 tokens   Adam uses two moment estimates: the first moment (mean)...
+  ...
+  Total tokens :  1280
+  Wall time    :  17.80s
+  Throughput   :  71.9 tokens/s
+
+  ── EAGLE3 Speculative Decoding (draft_tokens=5) ─────
+  Total tokens :  1280
+  Wall time    :   5.20s
+  Throughput   : 246.2 tokens/s
+
+  ── RESULTS ──────────────────────────────────────────
+  Standard   :   71.9 tokens/s
+  EAGLE3     :  246.2 tokens/s
+  Speedup    :   3.42x
 """
 
 import time

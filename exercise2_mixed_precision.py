@@ -9,6 +9,25 @@ Your task:
   1. Run the FP32 baseline and note peak memory + throughput.
   2. Uncomment the FP8 section (marked TODO) and re-run.
   3. Try NVFP4 on Blackwell and compare all three.
+
+Expected output (B200 / GB10, batch=8, seq=512, d_model=1024) — NOT actual results:
+
+  [Naive FP32 (baseline)]
+    Time:        38.40s    Throughput:   10.4 samples/s    Peak Memory: 3.820 GB
+
+  [FP16 AMP]
+    Time:        19.20s    Peak Memory: 2.540 GB
+
+  [TE FP8]
+    Time:         7.10s    Throughput:   56.3 samples/s    Peak Memory: 1.910 GB
+
+  [TE NVFP4 (Blackwell)]
+    Time:         3.20s    Throughput:  125.0 samples/s    Peak Memory: 0.980 GB
+
+  ── Summary (vs FP32 baseline) ───────────────────────
+  FP16 AMP  speedup:  2.00x   memory:  1.50x
+  TE FP8    speedup:  5.41x   memory:  2.00x
+  TE NVFP4  speedup: 12.00x   memory:  3.90x  ← Blackwell
 """
 
 import time
@@ -67,9 +86,9 @@ class TETransformerBlock(nn.Module):
 
 # ── Training loop ─────────────────────────────────────────────────────────────
 def train(model: nn.Module, label: str, fp8_recipe=None, bf16_input: bool = False) -> tuple[float, float]:
-    model = model.to(DEVICE)
-    opt   = torch.optim.AdamW(model.parameters(), lr=1e-4)
     dtype = torch.bfloat16 if bf16_input else torch.float32
+    model = model.to(DEVICE, dtype=dtype)
+    opt   = torch.optim.AdamW(model.parameters(), lr=1e-4)
     x     = torch.randn(BATCH, SEQ_LEN, D_MODEL, device=DEVICE, dtype=dtype)
 
     torch.cuda.reset_peak_memory_stats(DEVICE)
