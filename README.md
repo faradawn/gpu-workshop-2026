@@ -6,39 +6,16 @@
 
 ## Getting Started
 
-### Requirements
-
-You will need a **Blackwell GPU** — DGX Spark, RTX 6000, or B200.
+GPUs: H200, B200, etc.
 
 ### 1. Pull the PyTorch Container
-
-```bash
-docker pull nvcr.io/nvidia/pytorch:25.11-py3
-```
-
-### 2. Launch the Container
-
 ```bash
 docker run --gpus all --rm -it \
   --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 \
   -v $(pwd):/workspace \
   -w /workspace \
-  nvcr.io/nvidia/pytorch:25.11-py3 bash
+  nvcr.io/nvidia/pytorch:26.01-py3 bash
 ```
-
-> `--ipc=host` and the `--ulimit` flags are **required** on DGX Spark / GB10 — without them
-> the shared-memory kernel used by Transformer Engine's amax computation will fail.
->
-> The container ships with PyTorch 2.10, CUDA 13, Transformer Engine 2.9, and all
-> NVFP4 / FP8 support pre-installed. No extra `pip install` needed for Exercises 1 and 2.
-
-### 3. Install vLLM (Exercise 3 only)
-
-```bash
-pip install vllm
-```
-
----
 
 ## Exercises
 
@@ -84,6 +61,8 @@ automatically handles the master-weight FP32 copy and gradient scaling under the
 **File:** `exercise3_speculative_decoding.py`
 
 ```bash
+pip install vllm
+
 python exercise3_speculative_decoding.py
 ```
 
