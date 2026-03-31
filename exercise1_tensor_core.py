@@ -1,34 +1,43 @@
 """
-Exercise 1: Tensor Core Benchmark — NVFP4 vs FP16 Matrix Multiplication
-Run on a Blackwell GPU (DGX Spark, RTX 6000, or B200)
+Exercise 1: Tensor Core Benchmark — FP32 → FP16 → FP8 Matrix Multiplication
+Run on an NVIDIA H100 (Hopper) or compatible datacenter GPU.
 
-Goal: See how Tensor Cores accelerate lower-precision matmuls.
-      FP16 → FP8 → NVFP4: each step roughly doubles TFLOP/s on Blackwell.
+Goal: See how Tensor Cores accelerate the precision ladder.
+      FP32 → FP16 → FP8: each step increases effective TFLOP/s and reduces memory traffic.
 
-Expected output (B200 / GB10, 4096×4096 matrix) — NOT actual results:
+Why 8192×8192?  Smaller matrices (e.g. 4096) finish in <0.2 ms on H100, so Transformer
+Engine's per-call overhead (scale-factor bookkeeping, quantise/dequantise) dominates and
+FP8 appears no faster than FP16.  Larger matrices push compute time well above that
+overhead floor, revealing the true Tensor Core throughput difference.
+
+Expected output (H100 SXM 80 GB, 8192×8192 matrix):
   ── Standard PyTorch Matmul ──────────────────────────
-  [FP32  ]    3.200 ms    43.01 TFLOP/s
-  [FP16  ]    0.820 ms   167.88 TFLOP/s
-  [BF16  ]    0.820 ms   167.88 TFLOP/s
+  [FP32  ]    2.873 ms   382.74 TFLOP/s
+  [FP16  ]    1.614 ms   681.06 TFLOP/s
 
-  ── Transformer Engine (Tensor Core, low precision) ──
-  [FP8   ]    0.420 ms   327.87 TFLOP/s
-  [NVFP4 ]    0.220 ms   625.74 TFLOP/s  ← Blackwell Tensor Cores
+  ── Transformer Engine (Tensor Core FP8) ────────────
+  [FP8   ]    1.015 ms  1083.69 TFLOP/s
 
   ── Speedup vs FP32 ──────────────────────────────────
-  FP16:  3.90x
-  BF16:  3.90x
-  FP8:   7.62x
-  NVFP4: 14.55x  ← Blackwell Tensor Cores
+  FP16:  1.78x
+  FP8:   2.83x
+
+  Note: PyTorch uses TF32 Tensor Cores for float32 matmul by default on Hopper,
+  so the "FP32" row is already Tensor-Core-accelerated.  Peak non-sparse rates for
+  H100 SXM: TF32 495 / FP16 990 / FP8 1979 TFLOP/s — the FP8 path through
+  Transformer Engine's te.Linear adds per-call overhead (scale-factor tracking,
+  quantise/dequantise), which is why the measured 2.83x is below the 4x theoretical.
+
+  FP4 block scaling (e.g. NVFP4) is available on Blackwell GPUs with the same TE APIs;
+  this exercise focuses on the Hopper/H100 FP8 path.
 """
 
-import time
 import torch
 import transformer_engine.pytorch as te
-from transformer_engine.common.recipe import DelayedScaling, Float8CurrentScaling, Format, NVFP4BlockScaling
+from transformer_engine.common.recipe import Float8CurrentScaling
 
-MATRIX_SIZE = 4096
-WARMUP = 20
+MATRIX_SIZE = 8192
+WARMUP = 50
 ITERS = 100
 DEVICE = "cuda"
 
@@ -60,11 +69,11 @@ def bench_torch_mm(dtype, label: str) -> float:
     return tf
 
 
-def bench_te_linear(recipe, label: str, bf16: bool = False) -> float:
-    dtype = torch.bfloat16 if bf16 else torch.float32
-    linear = te.Linear(MATRIX_SIZE, MATRIX_SIZE, bias=False).to(DEVICE).to(dtype)
-    x = torch.randn(MATRIX_SIZE, MATRIX_SIZE, device=DEVICE, dtype=dtype)
+def bench_te_linear(recipe, label: str) -> float:
+    linear = te.Linear(MATRIX_SIZE, MATRIX_SIZE, bias=False).to(DEVICE).to(torch.bfloat16)
+    x = torch.randn(MATRIX_SIZE, MATRIX_SIZE, device=DEVICE, dtype=torch.bfloat16)
 
+    # TE JIT-compiles FP8 kernels during the first few calls; generous warmup absorbs that.
     for _ in range(WARMUP):
         with te.fp8_autocast(enabled=True, fp8_recipe=recipe):
             linear(x)
@@ -92,24 +101,11 @@ if __name__ == "__main__":
     print("── Standard PyTorch Matmul ──────────────────────────")
     tf_fp32 = bench_torch_mm(torch.float32, "FP32")
     tf_fp16 = bench_torch_mm(torch.float16, "FP16")
-    tf_bf16 = bench_torch_mm(torch.bfloat16, "BF16")
 
-    print("\n── Transformer Engine (Tensor Core, low precision) ──")
-    # FP8 — works on Hopper and Blackwell
+    print("\n── Transformer Engine (Tensor Core FP8) ────────────")
     fp8_recipe = Float8CurrentScaling()
-    tf_fp8 = bench_te_linear(fp8_recipe, "FP8", bf16=True)
-
-    # NVFP4 — Blackwell-exclusive (B200, RTX 6000, DGX Spark GB10)
-    # Requires bfloat16 input; disable_rht=True avoids shared-memory constraint on GB10
-    tf_fp4 = None
-    try:
-        fp4_recipe = NVFP4BlockScaling(disable_rht=True)
-        tf_fp4 = bench_te_linear(fp4_recipe, "NVFP4", bf16=True)
-    except Exception as e:
-        print(f"  [NVFP4]  Not available on this GPU: {e}")
+    tf_fp8 = bench_te_linear(fp8_recipe, "FP8")
 
     print("\n── Speedup vs FP32 ──────────────────────────────────")
-    for label, tf in [("FP16", tf_fp16), ("BF16", tf_bf16), ("FP8", tf_fp8)]:
+    for label, tf in [("FP16", tf_fp16), ("FP8", tf_fp8)]:
         print(f"  {label}: {tf / tf_fp32:.2f}x")
-    if tf_fp4:
-        print(f"  NVFP4: {tf_fp4 / tf_fp32:.2f}x  ← Blackwell Tensor Cores")

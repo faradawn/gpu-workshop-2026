@@ -6,7 +6,7 @@
 
 ## Getting Started
 
-GPUs: H200, B200, etc.
+Primary GPU for these exercises: **NVIDIA H100** (Hopper). The same code runs on other CUDA GPUs where the listed libraries support the dtypes (e.g. H200, L40S); FP8 Tensor Core paths require Hopper or newer.
 
 ### 1. Pull the PyTorch Container
 ```bash
@@ -19,7 +19,7 @@ docker run --gpus all --rm -it \
 
 ## Exercises
 
-### Exercise 1 — Tensor Core Benchmark (NVFP4 vs FP16 matmul)
+### Exercise 1 — Tensor Core Benchmark (FP32 → FP16 → FP8 matmul)
 
 **File:** `exercise1_tensor_core.py`
 
@@ -27,13 +27,11 @@ docker run --gpus all --rm -it \
 python exercise1_tensor_core.py
 ```
 
-Benchmarks FP32 → FP16 → BF16 → FP8 → **NVFP4** matrix multiplication on Tensor Cores.
-Each lower-precision step roughly doubles TFLOP/s on Blackwell hardware.
-Watch the speedup column grow as precision drops.
+Benchmarks **FP32 → FP16** with standard PyTorch `torch.mm`, then **FP8** matrix multiplication through Transformer Engine on Tensor Cores using an **8192×8192** matrix (large enough for FP8 Tensor Core throughput to dominate over Transformer Engine per-call overhead).
 
 ---
 
-### Exercise 2 — Mixed-Precision Training (NVFP4 vs FP16)
+### Exercise 2 — Mixed-Precision Training (FP32, FP16, FP8)
 
 **File:** `exercise2_mixed_precision.py`
 
@@ -41,18 +39,14 @@ Watch the speedup column grow as precision drops.
 python exercise2_mixed_precision.py
 ```
 
-Starts with a naive FP32 Transformer block that is slow and memory-hungry.
-Your task is to add the `te.fp8_autocast` context manager (marked `TODO` in the file)
-and observe memory and throughput change:
+Starts with a naive FP32 Transformer block (`d_model=2048`) and runs 100 timed training steps after a 10-step warmup (to absorb Transformer Engine's one-time kernel JIT compilation). Compares **FP16 automatic mixed precision** and **FP8 via Transformer Engine** (`te.fp8_autocast` with `Float8CurrentScaling`):
 
-| Precision   | Expected speedup | Memory reduction |
-|-------------|-----------------|-----------------|
-| FP16 AMP    | ~2x             | ~1.5x           |
-| FP8 (TE)    | ~4–6x           | ~2x             |
-| NVFP4 (TE)  | ~10–15x         | ~4x             |
+| Precision   | Expected speedup (vs FP32/TF32) | Notes |
+|-------------|--------------------------------|-------|
+| FP16 AMP    | ~1.4x                          | PyTorch uses TF32 Tensor Cores by default for float32, so baseline is already fast |
+| FP8 (TE)    | ~2.5x                          | Attention, norms, and optimizer are memory-bound and don't benefit from precision; ~2.5x is realistic for a single-layer bench |
 
-The `TETransformerBlock` uses NVIDIA Transformer Engine's `te.TransformerLayer` which
-automatically handles the master-weight FP32 copy and gradient scaling under the hood.
+The `TETransformerBlock` uses NVIDIA Transformer Engine's `te.TransformerLayer`, which keeps master weights in FP32 and handles scaling for stable low-precision training.
 
 ---
 
@@ -66,17 +60,16 @@ pip install vllm
 python exercise3_speculative_decoding.py
 ```
 
-Runs 5 complex reasoning prompts through vLLM in two modes:
+Runs 5 prompts (code generation, math, reasoning) through vLLM **one at a time** (batch=1) in two modes:
 
 1. **Standard autoregressive decoding** — one token per forward pass.
 2. **EAGLE3 speculative decoding** — a small draft head proposes `N` tokens; the
    target model verifies all of them in a single forward pass, accepting any that match.
 
-Prints tokens/second side-by-side and the final speedup ratio.
-Expected result on a B200: **3–4x** throughput improvement with `num_speculative_tokens=5`.
+Speculative decoding is a **latency** optimisation for single requests — it helps when the GPU is memory-bound (batch=1). At large batch sizes the GPU becomes compute-bound and the draft-verify overhead can actually hurt. The prompts are chosen for high draft-acceptance rates (code, math, structured reasoning). On H100 at batch=1, expect **~1.5–2x** per-request speedup.
 
-> Default models: `meta-llama/Meta-Llama-3.1-8B-Instruct` (target) +
-> `yuhuili/EAGLE3-LLaMA3.1-Instruct-8B` (draft).
+> Default models: `Qwen/Qwen2.5-7B-Instruct` (target) +
+> `ruipeterpan/Qwen2.5-7B-Instruct_EAGLE3_UltraChat` (draft).
 > Edit `TARGET_MODEL` / `DRAFT_MODEL` at the top of the file to use a different checkpoint.
 
 ---
@@ -92,8 +85,8 @@ Expected result on a B200: **3–4x** throughput improvement with `num_speculati
   the energy overhead of an instruction (30 pJ) vs. a Fused Multiply-Add (1.5 pJ).
 
 - **GPU Architecture** — transition from CUDA cores to Tensor Cores; hardware evolution:
-  Kepler (GTX 580) → Volta (Tensor Core) → Ampere (BF16) → Hopper (FP8) → Blackwell (FP4).
-  Lower precision yields higher FLOP/s and less memory.
+  Kepler (GTX 580) → Volta (Tensor Core) → Ampere (BF16) → Hopper (**FP8**, H100) → Blackwell (FP4).
+  Lower precision yields higher FLOP/s and less memory; **this workshop focuses on the FP32 → FP16 → FP8 ladder on Hopper.**
 
 ### Part 2: Mixed-Precision Training
 
@@ -101,10 +94,10 @@ Expected result on a B200: **3–4x** throughput improvement with `num_speculati
   to round to zero, destabilising training.
 
 - **The Solution** — mixed-precision training keeps a "master" weight copy in FP32 while
-  computing forward/backward passes in low precision.
+  computing forward/backward passes in lower precision (FP16 or FP8).
 
-- **Implementation** — Transformer Engine (`te_low_precision_autocast`) automatically scales
-  precision (FP8 or NVFP4) for 10–15x speedups with minimal code changes.
+- **Implementation** — Transformer Engine (`fp8_autocast` with an FP8 recipe) automates
+  much of the scaling for large speedups with minimal code changes on H100-class GPUs.
 
 - **Memory Bottlenecks** — the Adam optimizer stores momentum and variance (2× model size).
   Gradient and optimizer-state sharding (e.g. ZeRO) addresses this.
@@ -124,3 +117,9 @@ Expected result on a B200: **3–4x** throughput improvement with `num_speculati
 
 - **Speculative Decoding** — improves token-generation throughput during inference by
   parallelising draft proposal and target verification.
+
+---
+
+## Extending to FP4 (Blackwell)
+
+The exercises above stop at **FP8**, which is the practical sweet spot on **H100**. The same Transformer Engine APIs (`fp8_autocast` with an FP4 block-scaling recipe such as `NVFP4BlockScaling`) can extend this workflow to **FP4 on NVIDIA Blackwell** GPUs (e.g. B200, GB10) for even higher compute density and lower activation/weight memory — at the cost of stricter hardware requirements and tuning. Use that path when your cluster has Blackwell and your training stack supports FP4 recipes end-to-end.
