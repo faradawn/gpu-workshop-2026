@@ -28,19 +28,24 @@ Models used (change to match your local paths or HF repo IDs):
 
 Expected output (H100 SXM 80 GB, Qwen2.5-7B, batch=1, 512 tokens) — illustrative:
 
-  ── Standard Autoregressive Decoding ─────────────────
-  [Code gen ]  512 tokens  22.4 tok/s
-  [Math     ]  512 tokens  21.8 tok/s
-  [Reasoning]  512 tokens  23.1 tok/s
-  Average: 22.4 tok/s
+  ── Standard Autoregressive Decoding (batch=1) ───────
+  [Code gen  ]  512 tokens  22.4 TPS
+  [Math      ]  512 tokens  21.8 TPS
+  [Reasoning ]  512 tokens  23.1 TPS
+  avg 22.4 TPS
 
-  ── EAGLE3 Speculative Decoding ──────────────────────
-  [Code gen ]  512 tokens  48.2 tok/s  (2.15x)
-  [Math     ]  512 tokens  44.6 tok/s  (2.05x)
-  [Reasoning]  512 tokens  42.1 tok/s  (1.82x)
-  Average: 44.9 tok/s
+  ── EAGLE3 Speculative Decoding (batch=1) ────────────
+  [Code gen  ]  512 tokens  48.2 TPS
+  [Math      ]  512 tokens  44.6 TPS
+  [Reasoning ]  512 tokens  42.1 TPS
+  avg 44.9 TPS
 
-  Overall speedup: 2.01x
+  ── PER-PROMPT RESULTS ───────────────────────────────
+  Prompt        Standard (TPS)   EAGLE3 (TPS)   Speedup
+  Code gen              22.4          48.2      2.15x
+  Math                  21.8          44.6      2.05x
+  Reasoning             23.1          42.1      1.82x
+  Average               22.4          44.9      2.01x
 """
 
 import time
@@ -113,13 +118,13 @@ def run_benchmark(llm: LLM, label: str) -> list[dict]:
         tps     = n_tok / elapsed
         snippet = outputs[0].outputs[0].text[:100].replace("\n", " ")
 
-        print(f"  [{tag:10s}]  {n_tok:4d} tokens  {tps:6.1f} tok/s  |  {snippet}...")
+        print(f"  [{tag:10s}]  {n_tok:4d} tokens  {tps:6.1f} TPS  |  {snippet}...")
         results.append({"tag": tag, "tokens": n_tok, "elapsed": elapsed, "tps": tps})
 
     total_tok = sum(r["tokens"] for r in results)
     total_sec = sum(r["elapsed"] for r in results)
     avg_tps   = total_tok / total_sec
-    print(f"\n  Total: {total_tok} tokens in {total_sec:.2f}s  →  avg {avg_tps:.1f} tok/s")
+    print(f"\n  Total: {total_tok} tokens in {total_sec:.2f}s  →  avg {avg_tps:.1f} TPS")
     return results
 
 
@@ -154,20 +159,20 @@ if __name__ == "__main__":
     print(f"\n{'='*60}")
     print(f" PER-PROMPT RESULTS")
     print(f"{'='*60}")
-    print(f"  {'Prompt':<12s}  {'Standard':>10s}  {'EAGLE3':>10s}  {'Speedup':>8s}")
-    print(f"  {'-'*12}  {'-'*10}  {'-'*10}  {'-'*8}")
+    print(f"  {'Prompt':<12s}  {'Standard (TPS)':>15s}  {'EAGLE3 (TPS)':>13s}  {'Speedup':>8s}")
+    print(f"  {'-'*12}  {'-'*15}  {'-'*13}  {'-'*8}")
 
     speedups = []
     for s, e in zip(res_std, res_eagle):
         sp = e["tps"] / s["tps"]
         speedups.append(sp)
-        print(f"  {s['tag']:<12s}  {s['tps']:>8.1f}/s  {e['tps']:>8.1f}/s  {sp:>7.2f}x")
+        print(f"  {s['tag']:<12s}  {s['tps']:>12.1f}    {e['tps']:>10.1f}    {sp:>7.2f}x")
 
     avg_std   = sum(r["tokens"] for r in res_std)   / sum(r["elapsed"] for r in res_std)
     avg_eagle = sum(r["tokens"] for r in res_eagle) / sum(r["elapsed"] for r in res_eagle)
     overall   = avg_eagle / avg_std
 
-    print(f"\n  {'Average':<12s}  {avg_std:>8.1f}/s  {avg_eagle:>8.1f}/s  {overall:>7.2f}x")
+    print(f"\n  {'Average':<12s}  {avg_std:>12.1f}    {avg_eagle:>10.1f}    {overall:>7.2f}x")
     print()
     if overall > 1.5:
         print("  Speculative decoding is providing meaningful latency reduction at batch=1.")
