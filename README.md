@@ -8,8 +8,10 @@
 
 Primary GPU for these exercises: **NVIDIA H100** (Hopper). The same code runs on other CUDA GPUs where the listed libraries support the dtypes (e.g. H200, L40S); FP8 Tensor Core paths require Hopper or newer.
 
-### 1. Pull the PyTorch Container
+### 1. Pull and Run the PyTorch Container
 ```bash
+docker pull nvcr.io/nvidia/pytorch:26.01-py3
+
 docker run --gpus all --rm -it \
   --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 \
   -v $(pwd):/workspace \
